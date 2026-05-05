@@ -17,13 +17,30 @@ type PeerConnection struct {
 }
 
 // NewPeerConnection creates a new WebRTC peer connection.
-func NewPeerConnection() (*PeerConnection, error) {
+// cloudServers are sent automatically by the cloud over the signalling socket.
+// If the cloud has not sent any config yet, the optional env-var TURN settings
+// are used as a fallback.
+func NewPeerConnection(cloudServers []webrtc.ICEServer, turnURL, turnUser, turnPass string) (*PeerConnection, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	config := webrtc.Configuration{
-		ICEServers: []webrtc.ICEServer{
+	var iceServers []webrtc.ICEServer
+	if len(cloudServers) > 0 {
+		iceServers = append([]webrtc.ICEServer{}, cloudServers...)
+	} else {
+		iceServers = []webrtc.ICEServer{
 			{URLs: []string{"stun:stun.l.google.com:19302"}},
-		},
+		}
+		if turnURL != "" {
+			iceServers = append(iceServers, webrtc.ICEServer{
+				URLs:       []string{turnURL},
+				Username:   turnUser,
+				Credential: turnPass,
+			})
+		}
+	}
+
+	config := webrtc.Configuration{
+		ICEServers: iceServers,
 	}
 
 	pc, err := webrtc.NewPeerConnection(config)

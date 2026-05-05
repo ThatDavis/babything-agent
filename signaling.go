@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/pion/webrtc/v4"
 )
 
 // SignalMessage is the JSON envelope exchanged with the cloud signal server.
@@ -21,12 +22,13 @@ type SignalMessage struct {
 
 // SignalingClient maintains the WebSocket connection to the cloud.
 type SignalingClient struct {
-	cfg Config
-	pc  *PeerConnection
+	cfg        Config
+	pc         *PeerConnection
+	iceServers []webrtc.ICEServer
 
-	conn     *websocket.Conn
-	done     chan struct{}
-	writeMu  chan struct{} // serialises writes (capacity 1)
+	conn    *websocket.Conn
+	done    chan struct{}
+	writeMu chan struct{} // serialises writes (capacity 1)
 }
 
 // NewSignalingClient creates a client that will keep reconnecting until Stop().
@@ -116,16 +118,64 @@ func (c *SignalingClient) readLoop() {
 			go c.handleRemoteICE(msg)
 		case "ping":
 			c.send(SignalMessage{Type: "pong"})
+		case "config":
+			c.handleConfig(data)
 		case "connected":
 			log.Printf("connected to cloud, session %s", msg.SessionID)
 		}
 	}
 }
 
+func (c *SignalingClient) handleConfig(data []byte) {
+	var payload struct {
+		ICEServers []rawICEServer `json:"iceServers"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		log.Printf("failed to parse ice config: %v", err)
+		return
+	}
+
+	servers := make([]webrtc.ICEServer, 0, len(payload.ICEServers))
+	for _, s := range payload.ICEServers {
+		urls, err := parseURLs(s.URLs)
+		if err != nil {
+			continue
+		}
+		servers = append(servers, webrtc.ICEServer{
+			URLs:       urls,
+			Username:   s.Username,
+			Credential: s.Credential,
+		})
+	}
+
+	if len(servers) > 0 {
+		c.iceServers = servers
+		log.Printf("received ice config with %d server(s)", len(servers))
+	}
+}
+
+type rawICEServer struct {
+	URLs       json.RawMessage `json:"urls"`
+	Username   string          `json:"username,omitempty"`
+	Credential string          `json:"credential,omitempty"`
+}
+
+func parseURLs(raw json.RawMessage) ([]string, error) {
+	var arr []string
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		return arr, nil
+	}
+	var single string
+	if err := json.Unmarshal(raw, &single); err != nil {
+		return nil, err
+	}
+	return []string{single}, nil
+}
+
 func (c *SignalingClient) handleOffer(msg SignalMessage) {
 	log.Printf("received offer for watch %s", msg.WatchID)
 
-	pc, err := NewPeerConnection()
+	pc, err := NewPeerConnection(c.iceServers, c.cfg.TURNURL, c.cfg.TURNUsername, c.cfg.TURNPassword)
 	if err != nil {
 		log.Printf("failed to create peer connection: %v", err)
 		return
