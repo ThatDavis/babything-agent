@@ -20,7 +20,9 @@ type PeerConnection struct {
 // cloudServers are sent automatically by the cloud over the signalling socket.
 // If the cloud has not sent any config yet, the optional env-var TURN settings
 // are used as a fallback.
-func NewPeerConnection(cloudServers []webrtc.ICEServer, turnURL, turnUser, turnPass string) (*PeerConnection, error) {
+// onCandidate is called for each locally gathered ICE candidate so they can be
+// sent to the peer via trickle ICE.
+func NewPeerConnection(cloudServers []webrtc.ICEServer, turnURL, turnUser, turnPass string, onCandidate func(*webrtc.ICECandidate)) (*PeerConnection, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	var iceServers []webrtc.ICEServer
@@ -47,6 +49,10 @@ func NewPeerConnection(cloudServers []webrtc.ICEServer, turnURL, turnUser, turnP
 	if err != nil {
 		cancel()
 		return nil, err
+	}
+
+	if onCandidate != nil {
+		pc.OnICECandidate(onCandidate)
 	}
 
 	// Create a video track (H.264)
@@ -84,7 +90,9 @@ func (p *PeerConnection) SetRemoteDescription(sdp string) error {
 	return p.pc.SetRemoteDescription(offer)
 }
 
-// CreateAnswer generates an SDP answer and waits for ICE gathering to finish.
+// CreateAnswer generates an SDP answer and begins ICE gathering.
+// Candidates are sent asynchronously via the OnICECandidate callback
+// (trickle ICE), so the answer is returned immediately.
 func (p *PeerConnection) CreateAnswer() (string, error) {
 	answer, err := p.pc.CreateAnswer(nil)
 	if err != nil {
@@ -94,9 +102,6 @@ func (p *PeerConnection) CreateAnswer() (string, error) {
 	if err := p.pc.SetLocalDescription(answer); err != nil {
 		return "", err
 	}
-
-	// Block until ICE gathering is complete
-	<-webrtc.GatheringCompletePromise(p.pc)
 
 	return p.pc.LocalDescription().SDP, nil
 }

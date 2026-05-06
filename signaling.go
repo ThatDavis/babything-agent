@@ -175,7 +175,20 @@ func parseURLs(raw json.RawMessage) ([]string, error) {
 func (c *SignalingClient) handleOffer(msg SignalMessage) {
 	log.Printf("received offer for watch %s", msg.WatchID)
 
-	pc, err := NewPeerConnection(c.iceServers, c.cfg.TURNURL, c.cfg.TURNUsername, c.cfg.TURNPassword)
+	onCandidate := func(candidate *webrtc.ICECandidate) {
+		if candidate == nil {
+			return
+		}
+		init := candidate.ToJSON()
+		raw, err := json.Marshal(init)
+		if err != nil {
+			log.Printf("marshal candidate failed: %v", err)
+			return
+		}
+		c.send(SignalMessage{Type: "ice", WatchID: msg.WatchID, Candidate: raw})
+	}
+
+	pc, err := NewPeerConnection(c.iceServers, c.cfg.TURNURL, c.cfg.TURNUsername, c.cfg.TURNPassword, onCandidate)
 	if err != nil {
 		log.Printf("failed to create peer connection: %v", err)
 		return
