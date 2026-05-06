@@ -16,13 +16,17 @@ type Config struct {
 }
 
 func loadConfig() (Config, error) {
+	turnPassword := os.Getenv("TURN_PASSWORD")
+	if turnPassword == "" {
+		turnPassword = os.Getenv("TURN_CREDENTIAL")
+	}
 	cfg := Config{
 		CloudURL:     os.Getenv("CLOUD_URL"),
 		RTSPURL:      os.Getenv("RTSP_URL"),
 		Token:        os.Getenv("AGENT_TOKEN"),
 		TURNURL:      os.Getenv("TURN_URL"),
 		TURNUsername: os.Getenv("TURN_USERNAME"),
-		TURNPassword: os.Getenv("TURN_PASSWORD"),
+		TURNPassword: turnPassword,
 	}
 	if cfg.CloudURL == "" {
 		return cfg, fmt.Errorf("CLOUD_URL is required")
