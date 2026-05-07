@@ -8,6 +8,12 @@
 
 ## Now (Next 1–2 Weeks)
 
+### Multi-Viewer Support ✅ In Progress
+- [x] Share one video track across multiple peer connections
+- [x] Single ffmpeg process regardless of viewer count
+- [x] Per-viewer peer connection with auto-cleanup on disconnect
+- [x] Thread-safe peer map with deadlock-free close paths
+
 ### CI/CD & Release Automation
 - [ ] GitHub Actions workflow: build release binaries on tag push
   - [ ] Linux AMD64

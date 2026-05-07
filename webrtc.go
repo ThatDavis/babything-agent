@@ -1,31 +1,19 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"log"
-	"time"
 
 	"github.com/pion/webrtc/v4"
 )
 
-// PeerConnection wraps a Pion peer connection for the monitor agent.
+// PeerConnection wraps a single Pion peer connection for one viewer.
 type PeerConnection struct {
-	pc         *webrtc.PeerConnection
-	videoTrack *webrtc.TrackLocalStaticRTP
-	ctx        context.Context
-	cancel     context.CancelFunc
+	pc *webrtc.PeerConnection
 }
 
-// NewPeerConnection creates a new WebRTC peer connection.
-// cloudServers are sent automatically by the cloud over the signalling socket.
-// If the cloud has not sent any config yet, the optional env-var TURN settings
-// are used as a fallback.
-// onCandidate is called for each locally gathered ICE candidate so they can be
-// sent to the peer via trickle ICE.
-func NewPeerConnection(cloudServers []webrtc.ICEServer, turnURL, turnUser, turnPass string, onCandidate func(*webrtc.ICECandidate)) (*PeerConnection, error) {
-	ctx, cancel := context.WithCancel(context.Background())
-
+// NewPeerConnection creates a WebRTC peer connection and adds the given tracks.
+func NewPeerConnection(cloudServers []webrtc.ICEServer, turnURL, turnUser, turnPass string, tracks []*webrtc.TrackLocalStaticRTP, onCandidate func(*webrtc.ICECandidate)) (*PeerConnection, error) {
 	var iceServers []webrtc.ICEServer
 	if len(cloudServers) > 0 {
 		iceServers = append([]webrtc.ICEServer{}, cloudServers...)
@@ -48,7 +36,6 @@ func NewPeerConnection(cloudServers []webrtc.ICEServer, turnURL, turnUser, turnP
 
 	pc, err := webrtc.NewPeerConnection(config)
 	if err != nil {
-		cancel()
 		return nil, err
 	}
 
@@ -56,30 +43,14 @@ func NewPeerConnection(cloudServers []webrtc.ICEServer, turnURL, turnUser, turnP
 		pc.OnICECandidate(onCandidate)
 	}
 
-	// Create a video track (H.264)
-	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264},
-		"video",
-		"babything-monitor",
-	)
-	if err != nil {
-		pc.Close()
-		cancel()
-		return nil, err
+	for _, track := range tracks {
+		if _, err := pc.AddTrack(track); err != nil {
+			pc.Close()
+			return nil, err
+		}
 	}
 
-	if _, err := pc.AddTrack(videoTrack); err != nil {
-		pc.Close()
-		cancel()
-		return nil, err
-	}
-
-	return &PeerConnection{
-		pc:         pc,
-		videoTrack: videoTrack,
-		ctx:        ctx,
-		cancel:     cancel,
-	}, nil
+	return &PeerConnection{pc: pc}, nil
 }
 
 // SetRemoteDescription accepts the browser's SDP offer.
@@ -92,8 +63,6 @@ func (p *PeerConnection) SetRemoteDescription(sdp string) error {
 }
 
 // CreateAnswer generates an SDP answer and begins ICE gathering.
-// Candidates are sent asynchronously via the OnICECandidate callback
-// (trickle ICE), so the answer is returned immediately.
 func (p *PeerConnection) CreateAnswer() (string, error) {
 	answer, err := p.pc.CreateAnswer(nil)
 	if err != nil {
@@ -116,30 +85,13 @@ func (p *PeerConnection) AddICECandidate(candidate json.RawMessage) error {
 	return p.pc.AddICECandidate(c)
 }
 
-// StartRTSP launches ffmpeg to read the camera and forward RTP into the track.
-// If ffmpeg exits (e.g. camera drops) the relay is automatically restarted.
-func (p *PeerConnection) StartRTSP(rtspURL string) {
-	go func() {
-		for {
-			select {
-			case <-p.ctx.Done():
-				return
-			default:
-			}
-			startRTPRelay(p.ctx, rtspURL, p.videoTrack)
-			// ffmpeg exited; wait a moment before restarting to avoid busy-looping
-			select {
-			case <-p.ctx.Done():
-				return
-			case <-time.After(2 * time.Second):
-			}
-		}
-	}()
+// OnConnectionStateChange registers a callback for peer connection state changes.
+func (p *PeerConnection) OnConnectionStateChange(f func(webrtc.PeerConnectionState)) {
+	p.pc.OnConnectionStateChange(f)
 }
 
-// Close tears down the peer connection and stops ffmpeg.
+// Close tears down the peer connection.
 func (p *PeerConnection) Close() {
-	p.cancel()
 	if p.pc != nil {
 		if err := p.pc.Close(); err != nil {
 			log.Printf("pc close error: %v", err)
