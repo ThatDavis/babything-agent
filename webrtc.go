@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"time"
 
 	"github.com/pion/webrtc/v4"
 )
@@ -116,8 +117,24 @@ func (p *PeerConnection) AddICECandidate(candidate json.RawMessage) error {
 }
 
 // StartRTSP launches ffmpeg to read the camera and forward RTP into the track.
+// If ffmpeg exits (e.g. camera drops) the relay is automatically restarted.
 func (p *PeerConnection) StartRTSP(rtspURL string) {
-	go startRTPRelay(p.ctx, rtspURL, p.videoTrack)
+	go func() {
+		for {
+			select {
+			case <-p.ctx.Done():
+				return
+			default:
+			}
+			startRTPRelay(p.ctx, rtspURL, p.videoTrack)
+			// ffmpeg exited; wait a moment before restarting to avoid busy-looping
+			select {
+			case <-p.ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}()
 }
 
 // Close tears down the peer connection and stops ffmpeg.

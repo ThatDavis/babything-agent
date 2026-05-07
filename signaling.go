@@ -88,6 +88,14 @@ func (c *SignalingClient) connect() error {
 		return err
 	}
 	c.conn = conn
+
+	// Reset read deadline on native WebSocket ping frames so the connection
+	// stays alive even when the server switches from JSON ping to native ping.
+	c.conn.SetPingHandler(func(appData string) error {
+		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return c.conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(time.Second))
+	})
+
 	return nil
 }
 

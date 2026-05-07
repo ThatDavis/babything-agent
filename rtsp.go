@@ -5,16 +5,24 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"os/exec"
+	"syscall"
 	"time"
 
 	"github.com/pion/webrtc/v4"
 )
 
+// processAlive checks whether a process is still running (Unix only).
+func processAlive(p *os.Process) bool {
+	err := p.Signal(syscall.Signal(0))
+	return err == nil
+}
+
 // startRTPRelay runs ffmpeg to pull the RTSP stream and copy the raw RTP
 // packets straight into the WebRTC track.  It requires the camera to emit
-// H.264; if your camera uses a different codec ffmpeg will exit and the agent
-// will reconnect automatically.
+// H.264; if your camera uses a different codec ffmpeg will exit and the caller
+// is expected to restart the relay.
 func startRTPRelay(ctx context.Context, rtspURL string, track *webrtc.TrackLocalStaticRTP) {
 	// Bind a random local UDP port for ffmpeg to send RTP to.
 	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
@@ -64,6 +72,11 @@ func startRTPRelay(ctx context.Context, rtspURL string, track *webrtc.TrackLocal
 		case <-ctx.Done():
 			return
 		default:
+		}
+
+		if !processAlive(cmd.Process) {
+			log.Printf("ffmpeg process died, stopping relay")
+			return
 		}
 
 		_ = conn.SetReadDeadline(time.Now().Add(1 * time.Second))
