@@ -29,6 +29,12 @@ func startRTPRelay(ctx context.Context, rtspURL string, track *webrtc.TrackLocal
 	}
 	defer conn.Close()
 
+	// Increase socket buffer so a high-bitrate 4K stream doesn't overflow
+	// the default ~208KB Linux UDP buffer between reads.
+	if err := conn.SetReadBuffer(2 * 1024 * 1024); err != nil {
+		log.Printf("warning: failed to set udp read buffer: %v", err)
+	}
+
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
 	rtpURL := fmt.Sprintf("rtp://127.0.0.1:%d?pkt_size=1200", localAddr.Port)
 
@@ -51,6 +57,7 @@ func startRTPRelay(ctx context.Context, rtspURL string, track *webrtc.TrackLocal
 		log.Printf("ffmpeg start failed: %v", err)
 		return
 	}
+	log.Printf("ffmpeg started, relaying to udp %s", localAddr.String())
 
 	// Monitor ffmpeg exit in a background goroutine.
 	// We cannot call cmd.Wait() twice, so we do it here and signal the main
