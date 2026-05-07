@@ -190,7 +190,10 @@ func parseURLs(raw json.RawMessage) ([]string, error) {
 }
 
 func (c *SignalingClient) handleOffer(msg SignalMessage) {
-	log.Printf("received offer for watch %s", msg.WatchID)
+	c.peersMu.Lock()
+	peerCount := len(c.peers)
+	c.peersMu.Unlock()
+	log.Printf("[signaling] received offer for watch=%s (active peers before: %d)", msg.WatchID, peerCount)
 
 	onCandidate := func(candidate *webrtc.ICECandidate) {
 		if candidate == nil {
@@ -199,7 +202,7 @@ func (c *SignalingClient) handleOffer(msg SignalMessage) {
 		init := candidate.ToJSON()
 		raw, err := json.Marshal(init)
 		if err != nil {
-			log.Printf("marshal candidate failed: %v", err)
+			log.Printf("[signaling] marshal candidate failed: %v", err)
 			return
 		}
 		c.send(SignalMessage{Type: "ice", WatchID: msg.WatchID, Candidate: raw})
@@ -207,7 +210,7 @@ func (c *SignalingClient) handleOffer(msg SignalMessage) {
 
 	pc, err := NewPeerConnection(c.iceServers, c.cfg.TURNURL, c.cfg.TURNUsername, c.cfg.TURNPassword, c.media.Tracks(), onCandidate)
 	if err != nil {
-		log.Printf("failed to create peer connection: %v", err)
+		log.Printf("[peer] failed to create peer connection for watch=%s: %v", msg.WatchID, err)
 		return
 	}
 
@@ -216,16 +219,19 @@ func (c *SignalingClient) handleOffer(msg SignalMessage) {
 	if old, ok := c.peers[msg.WatchID]; ok {
 		delete(c.peers, msg.WatchID)
 		c.peersMu.Unlock()
+		log.Printf("[peer] closing previous peer for watch=%s (replacing)", msg.WatchID)
 		go old.Close()
 		c.peersMu.Lock()
 	}
 	c.peers[msg.WatchID] = pc
+	newCount := len(c.peers)
 	c.peersMu.Unlock()
+	log.Printf("[peer] created peer for watch=%s (active peers: %d)", msg.WatchID, newCount)
 
 	// Auto-cleanup when the peer connection drops
 	watchID := msg.WatchID
 	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
-		log.Printf("peer %s connection state: %s", watchID, s.String())
+		log.Printf("[peer] watch=%s state=%s", watchID, s.String())
 		if s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateClosed || s == webrtc.PeerConnectionStateDisconnected {
 			c.removePeer(watchID)
 		}
@@ -245,10 +251,11 @@ func (c *SignalingClient) handleOffer(msg SignalMessage) {
 	}
 
 	c.send(SignalMessage{Type: "answer", WatchID: watchID, SDP: answer})
+	log.Printf("[signaling] sent answer for watch=%s", watchID)
 
 	// Start pulling RTSP on the first offer; shared by all viewers
 	c.rtspOnce.Do(func() {
-		log.Printf("starting RTSP relay for camera %s", c.cfg.RTSPURL)
+		log.Printf("[media] starting RTSP relay for camera %s", c.cfg.RTSPURL)
 		c.media.StartRTSP(c.cfg.RTSPURL)
 	})
 }
@@ -258,10 +265,13 @@ func (c *SignalingClient) handleRemoteICE(msg SignalMessage) {
 	pc, ok := c.peers[msg.WatchID]
 	c.peersMu.Unlock()
 	if !ok {
+		log.Printf("[signaling] ICE for unknown watch=%s (dropped)", msg.WatchID)
 		return
 	}
 	if err := pc.AddICECandidate(msg.Candidate); err != nil {
-		log.Printf("add ice candidate failed: %v", err)
+		log.Printf("[signaling] add ice candidate failed for watch=%s: %v", msg.WatchID, err)
+	} else {
+		log.Printf("[signaling] added remote ICE for watch=%s", msg.WatchID)
 	}
 }
 
@@ -271,22 +281,25 @@ func (c *SignalingClient) removePeer(watchID string) {
 	if ok {
 		delete(c.peers, watchID)
 	}
+	remaining := len(c.peers)
 	c.peersMu.Unlock()
 	if ok {
 		pc.Close()
-		log.Printf("removed peer %s", watchID)
+		log.Printf("[peer] removed watch=%s (remaining peers: %d)", watchID, remaining)
 	}
 }
 
 func (c *SignalingClient) closeAllPeers() {
 	c.peersMu.Lock()
-	peers := make([]*PeerConnection, 0, len(c.peers))
+	count := len(c.peers)
+	peers := make([]*PeerConnection, 0, count)
 	for _, pc := range c.peers {
 		peers = append(peers, pc)
 	}
 	c.peers = make(map[string]*PeerConnection)
 	c.peersMu.Unlock()
 
+	log.Printf("[peer] closing all %d peers (websocket disconnect)", count)
 	for _, pc := range peers {
 		pc.Close()
 	}
