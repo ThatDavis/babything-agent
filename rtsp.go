@@ -5,19 +5,11 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
 	"os/exec"
-	"syscall"
 	"time"
 
 	"github.com/pion/webrtc/v4"
 )
-
-// processAlive checks whether a process is still running (Unix only).
-func processAlive(p *os.Process) bool {
-	err := p.Signal(syscall.Signal(0))
-	return err == nil
-}
 
 // startRTPRelay runs ffmpeg to pull the RTSP stream and copy the raw RTP
 // packets straight into the WebRTC track.  It requires the camera to emit
@@ -60,10 +52,17 @@ func startRTPRelay(ctx context.Context, rtspURL string, track *webrtc.TrackLocal
 		return
 	}
 
+	// Monitor ffmpeg exit in a background goroutine.
+	// We cannot call cmd.Wait() twice, so we do it here and signal the main
+	// loop via a channel.  This correctly detects zombies (unlike Signal(0)).
+	ffmpegDone := make(chan error, 1)
+	go func() {
+		ffmpegDone <- cmd.Wait()
+	}()
+
 	// Ensure ffmpeg is killed when the relay stops.
 	defer func() {
 		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
 	}()
 
 	buf := make([]byte, 1500)
@@ -71,12 +70,14 @@ func startRTPRelay(ctx context.Context, rtspURL string, track *webrtc.TrackLocal
 		select {
 		case <-ctx.Done():
 			return
-		default:
-		}
-
-		if !processAlive(cmd.Process) {
-			log.Printf("ffmpeg process died, stopping relay")
+		case err := <-ffmpegDone:
+			if err != nil {
+				log.Printf("ffmpeg exited with error: %v", err)
+			} else {
+				log.Printf("ffmpeg exited cleanly")
+			}
 			return
+		default:
 		}
 
 		_ = conn.SetReadDeadline(time.Now().Add(1 * time.Second))
