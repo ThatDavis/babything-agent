@@ -1,33 +1,39 @@
 package main
 
 import (
-	"log"
-	"os"
-	"os/signal"
+	"embed"
+
+	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/options"
+	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 )
 
+//go:embed all:frontend/dist
+var assets embed.FS
+
 func main() {
-	cfg, err := loadConfig()
+	// Create an instance of the app structure
+	app := NewApp()
+
+	// Create application with options
+	err := wails.Run(&options.App{
+		Title:             "Babything Agent",
+		Width:             500,
+		Height:            520,
+		StartHidden:       true,
+		HideWindowOnClose: true,
+		AssetServer: &assetserver.Options{
+			Assets: assets,
+		},
+		BackgroundColour: &options.RGBA{R: 255, G: 255, B: 255, A: 1},
+		OnStartup:        app.startup,
+		OnShutdown:       app.shutdown,
+		Bind: []interface{}{
+			app,
+		},
+	})
+
 	if err != nil {
-		log.Fatalf("config error: %v", err)
+		println("Error:", err.Error())
 	}
-
-	log.Printf("babything agent starting")
-	log.Printf("cloud: %s", cfg.CloudURL)
-	log.Printf("camera: %s", cfg.RTSPURL)
-
-	client, err := NewSignalingClient(cfg)
-	if err != nil {
-		log.Fatalf("failed to create signaling client: %v", err)
-	}
-	go client.Run()
-
-	// Wait for interrupt
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt)
-	<-sig
-
-	log.Println("shutting down...")
-	client.Stop()
-	log.Println("goodbye")
 }

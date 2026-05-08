@@ -1,0 +1,16 @@
+[Unit]
+Description=Babything Agent — Camera bridge for Babything monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/babything-agent
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=babything-agent
+
+[Install]
+WantedBy=multi-user.target

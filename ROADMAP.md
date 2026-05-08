@@ -70,11 +70,14 @@
 - [ ] mTLS option for agent-to-cloud WebSocket (enterprise/self-hosted)
 - [ ] IP allowlist: restrict which IPs can connect as agents
 
-### Platform Packaging
-- [ ] systemd service file for Linux bare-metal installs
-- [ ] Homebrew formula for macOS
-- [ ] Windows service wrapper
-- [ ] Raspberry Pi Imager-compatible image (agent pre-installed)
+### Platform Packaging ✅
+- [x] Native binaries for Linux, Windows, macOS
+- [x] systemd service file for Linux bare-metal installs
+- [x] Wails desktop app for Windows and macOS
+- [x] GitHub Actions release pipeline with build matrix
+- [ ] Homebrew formula for macOS — deferred
+- [ ] Windows service wrapper — deferred
+- [ ] Raspberry Pi Imager-compatible image (agent pre-installed) — deferred
 
 ---
 

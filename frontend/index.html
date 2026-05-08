@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>Babything Agent</title>
+</head>
+<body>
+<div id="app">
+    <div class="header">
+        <h1>Babything Agent</h1>
+        <div class="status" id="status">Checking...</div>
+    </div>
+    <form id="settings-form">
+        <div class="field">
+            <label for="cloud-url">Cloud URL</label>
+            <input type="url" id="cloud-url" placeholder="wss://yourfamily.babything.app/monitor/agent" required>
+        </div>
+        <div class="field">
+            <label for="rtsp-url">Camera RTSP URL</label>
+            <input type="url" id="rtsp-url" placeholder="rtsp://admin:pass@192.168.1.50/stream" required>
+        </div>
+        <div class="field">
+            <label for="agent-token">Agent Token</label>
+            <input type="password" id="agent-token" placeholder="eyJhbG..." required>
+        </div>
+        <div class="field optional">
+            <label for="turn-url">TURN URL (optional)</label>
+            <input type="url" id="turn-url" placeholder="turn:turn.babything.app:3478">
+        </div>
+        <div class="field optional">
+            <label for="turn-username">TURN Username (optional)</label>
+            <input type="text" id="turn-username">
+        </div>
+        <div class="field optional">
+            <label for="turn-password">TURN Password (optional)</label>
+            <input type="password" id="turn-password">
+        </div>
+        <div class="actions">
+            <button type="submit" class="btn-primary" id="save-btn">Save & Start</button>
+            <button type="button" class="btn-secondary" id="stop-btn">Stop</button>
+        </div>
+    </form>
+</div>
+<script src="./src/main.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,120 @@
+name: Release Binaries
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build headless binaries
+        run: |
+          GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o babything-agent-linux-amd64 ./cmd/agent
+          GOOS=linux GOARCH=arm64 go build -ldflags="-w -s" -o babything-agent-linux-arm64 ./cmd/agent
+          GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-w -s" -o babything-agent-linux-arm ./cmd/agent
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-binaries
+          path: |
+            babything-agent-linux-*
+            build/linux/babything-agent.service
+            build/linux/install.sh
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Build desktop app
+        shell: bash
+        run: |
+          export PATH=$PATH:$(go env GOPATH)/bin
+          wails build -platform windows/amd64 -ldflags "-w -s"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-binary
+          path: build/bin/*.exe
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Build desktop app (universal)
+        run: |
+          export PATH=$PATH:$(go env GOPATH)/bin
+          wails build -platform darwin/universal -ldflags "-w -s"
+
+      - name: Zip .app bundle
+        run: |
+          cd build/bin
+          zip -r ../../babything-agent-macos-universal.zip *.app
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-binary
+          path: babything-agent-macos-universal.zip
+
+  release:
+    needs: [build-linux, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**
+          generate_release_notes: true
