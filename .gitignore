@@ -1,8 +1,7 @@
-agent
-babything-agent
+/agent
+/babything-agent
 node_modules/
 frontend/dist/*
 !frontend/dist/.gitkeep
 frontend/wailsjs/runtime/
 build/bin/
-
