@@ -5,7 +5,7 @@ WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-w -s" -o babything-agent .
+RUN CGO_ENABLED=0 go build -ldflags="-w -s" -o babything-agent ./cmd/agent
 
 # Runtime stage
 FROM alpine:3.19
