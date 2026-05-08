@@ -26,11 +26,12 @@
   - [ ] Tagged releases (`:latest`, `:v1.2.3`)
 - [ ] Release notes automation from conventional commits
 
-### Audio Stream Support
-- [ ] Add audio track to WebRTC peer connection
-- [ ] FFmpeg args: extract AAC audio from RTSP alongside video
-- [ ] Browser-side audio playback (volume/mute already in UI)
-- [ ] Fallback: opus re-encoding if camera audio codec is not WebRTC-compatible
+### Audio Stream Support ✅
+- [x] Add Opus audio track to WebRTC peer connection
+- [x] FFmpeg args: dual-output H.264 video + Opus audio from RTSP
+- [x] Browser-side audio playback with audio-only mode toggle
+- [x] Screen wake lock while monitoring
+- [x] Payload-type rewrite to match Pion default MediaEngine
 
 ---
 

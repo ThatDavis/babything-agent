@@ -6,37 +6,33 @@ import (
 	"log"
 	"net"
 	"os/exec"
+	"sync"
 	"time"
 
 	"github.com/pion/webrtc/v4"
 )
 
-// startRTPRelay runs ffmpeg to pull the RTSP stream and copy the raw RTP
-// packets straight into the WebRTC track.  It requires the camera to emit
-// H.264; if your camera uses a different codec ffmpeg will exit and the caller
-// is expected to restart the relay.
-func startRTPRelay(ctx context.Context, rtspURL string, track *webrtc.TrackLocalStaticRTP) {
-	// Bind a random local UDP port for ffmpeg to send RTP to.
-	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+// startMediaRelay runs ffmpeg to pull the RTSP stream and copy the raw RTP
+// packets into the WebRTC tracks.  It outputs both H.264 video and Opus audio
+// to separate local UDP ports so the two streams never interleave.
+func startMediaRelay(ctx context.Context, rtspURL string, videoTrack, audioTrack *webrtc.TrackLocalStaticRTP) {
+	// Bind two random local UDP ports — one for video, one for audio.
+	videoConn, videoPort, err := bindUDP("127.0.0.1:0")
 	if err != nil {
-		log.Printf("resolve udp addr failed: %v", err)
+		log.Printf("bind video udp failed: %v", err)
 		return
 	}
-	conn, err := net.ListenUDP("udp", addr)
+	defer videoConn.Close()
+
+	audioConn, audioPort, err := bindUDP("127.0.0.1:0")
 	if err != nil {
-		log.Printf("listen udp failed: %v", err)
+		log.Printf("bind audio udp failed: %v", err)
 		return
 	}
-	defer conn.Close()
+	defer audioConn.Close()
 
-	// Increase socket buffer so a high-bitrate 4K stream doesn't overflow
-	// the default ~208KB Linux UDP buffer between reads.
-	if err := conn.SetReadBuffer(2 * 1024 * 1024); err != nil {
-		log.Printf("warning: failed to set udp read buffer: %v", err)
-	}
-
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	rtpURL := fmt.Sprintf("rtp://127.0.0.1:%d?pkt_size=1200", localAddr.Port)
+	videoRTP := fmt.Sprintf("rtp://127.0.0.1:%d?pkt_size=1200", videoPort)
+	audioRTP := fmt.Sprintf("rtp://127.0.0.1:%d?pkt_size=1200", audioPort)
 
 	args := []string{
 		"-hide_banner",
@@ -44,10 +40,18 @@ func startRTPRelay(ctx context.Context, rtspURL string, track *webrtc.TrackLocal
 		"-rtsp_transport", "tcp",
 		"-re",
 		"-i", rtspURL,
+		// Video output: copy H.264, no audio
 		"-c:v", "copy",
 		"-an",
 		"-f", "rtp",
-		rtpURL,
+		videoRTP,
+		// Audio output: transcode to Opus, no video
+		"-c:a", "libopus",
+		"-ar", "48000",
+		"-ac", "2",
+		"-vn",
+		"-f", "rtp",
+		audioRTP,
 	}
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
@@ -57,11 +61,9 @@ func startRTPRelay(ctx context.Context, rtspURL string, track *webrtc.TrackLocal
 		log.Printf("ffmpeg start failed: %v", err)
 		return
 	}
-	log.Printf("ffmpeg started, relaying to udp %s", localAddr.String())
+	log.Printf("ffmpeg started, video→udp:%d audio→udp:%d", videoPort, audioPort)
 
 	// Monitor ffmpeg exit in a background goroutine.
-	// We cannot call cmd.Wait() twice, so we do it here and signal the main
-	// loop via a channel.  This correctly detects zombies (unlike Signal(0)).
 	ffmpegDone := make(chan error, 1)
 	go func() {
 		ffmpegDone <- cmd.Wait()
@@ -72,17 +74,75 @@ func startRTPRelay(ctx context.Context, rtspURL string, track *webrtc.TrackLocal
 		_ = cmd.Process.Kill()
 	}()
 
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Video relay — ffmpeg assigns PT 96 for the first output, which matches
+	// Pion's default H.264 payload type. No rewrite needed.
+	go func() {
+		defer wg.Done()
+		relayRTP(ctx, videoConn, videoTrack, 0)
+	}()
+
+	// Audio relay — ffmpeg assigns PT 97 for the second output, but Pion's
+	// default MediaEngine expects Opus at PT 111. Rewrite the PT byte.
+	go func() {
+		defer wg.Done()
+		relayRTP(ctx, audioConn, audioTrack, 111)
+	}()
+
+	// Wait for either context cancellation or ffmpeg exit.
+	select {
+	case <-ctx.Done():
+		return
+	case err := <-ffmpegDone:
+		if err != nil {
+			log.Printf("ffmpeg exited with error: %v", err)
+		} else {
+			log.Printf("ffmpeg exited cleanly")
+		}
+	}
+
+	// Closing the sockets unblocks the relay goroutines so they can exit.
+	videoConn.Close()
+	audioConn.Close()
+	wg.Wait()
+}
+
+// bindUDP creates a UDP listener on the given address and returns the
+// connection plus the assigned port.
+func bindUDP(addr string) (*net.UDPConn, int, error) {
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return nil, 0, err
+	}
+	conn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := conn.SetReadBuffer(2 * 1024 * 1024); err != nil {
+		log.Printf("warning: failed to set udp read buffer: %v", err)
+	}
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+	return conn, port, nil
+}
+
+// rewritePayloadType changes the RTP payload type in raw packet bytes.
+// It preserves the marker bit (top bit of the second byte).
+func rewritePayloadType(pkt []byte, newPT uint8) {
+	if len(pkt) < 2 {
+		return
+	}
+	pkt[1] = (pkt[1] & 0x80) | (newPT & 0x7F)
+}
+
+// relayRTP reads RTP packets from conn and writes them to track.
+// If rewritePT > 0, the payload type in each packet is rewritten to that value.
+func relayRTP(ctx context.Context, conn *net.UDPConn, track *webrtc.TrackLocalStaticRTP, rewritePT uint8) {
 	buf := make([]byte, 1500)
 	for {
 		select {
 		case <-ctx.Done():
-			return
-		case err := <-ffmpegDone:
-			if err != nil {
-				log.Printf("ffmpeg exited with error: %v", err)
-			} else {
-				log.Printf("ffmpeg exited cleanly")
-			}
 			return
 		default:
 		}
@@ -95,6 +155,10 @@ func startRTPRelay(ctx context.Context, rtspURL string, track *webrtc.TrackLocal
 			}
 			log.Printf("udp read error: %v", err)
 			return
+		}
+
+		if rewritePT > 0 {
+			rewritePayloadType(buf[:n], rewritePT)
 		}
 
 		if _, err := track.Write(buf[:n]); err != nil {
