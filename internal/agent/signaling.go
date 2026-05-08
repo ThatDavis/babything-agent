@@ -79,6 +79,17 @@ func (c *SignalingClient) Run() {
 
 		// Clean up all peer connections on disconnect so next offer starts fresh
 		c.closeAllPeers()
+
+		// Wait before reconnecting to avoid tight loops and server rate limits
+		log.Printf("disconnected, retrying in %v", backoff)
+		select {
+		case <-time.After(backoff):
+		case <-c.done:
+			return
+		}
+		if backoff < 30*time.Second {
+			backoff += 2 * time.Second
+		}
 	}
 }
 
