@@ -12,6 +12,32 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
+// buildFFmpegArgs returns the ffmpeg command-line arguments for pulling an
+// RTSP stream and outputting H.264 video and Opus audio to separate RTP
+// destinations.  The -re flag is intentionally omitted because the input is a
+// live network stream that is already paced by the source; adding -re causes
+// timing drift and audio wobble.
+func buildFFmpegArgs(rtspURL, videoRTP, audioRTP string) []string {
+	return []string{
+		"-hide_banner",
+		"-loglevel", "error",
+		"-rtsp_transport", "tcp",
+		"-i", rtspURL,
+		// Video output: copy H.264, no audio
+		"-c:v", "copy",
+		"-an",
+		"-f", "rtp",
+		videoRTP,
+		// Audio output: transcode to Opus, no video
+		"-c:a", "libopus",
+		"-ar", "48000",
+		"-ac", "2",
+		"-vn",
+		"-f", "rtp",
+		audioRTP,
+	}
+}
+
 // startMediaRelay runs ffmpeg to pull the RTSP stream and copy the raw RTP
 // packets into the WebRTC tracks.  It outputs both H.264 video and Opus audio
 // to separate local UDP ports so the two streams never interleave.
@@ -34,25 +60,7 @@ func startMediaRelay(ctx context.Context, rtspURL string, videoTrack, audioTrack
 	videoRTP := fmt.Sprintf("rtp://127.0.0.1:%d?pkt_size=1200", videoPort)
 	audioRTP := fmt.Sprintf("rtp://127.0.0.1:%d?pkt_size=1200", audioPort)
 
-	args := []string{
-		"-hide_banner",
-		"-loglevel", "error",
-		"-rtsp_transport", "tcp",
-		"-re",
-		"-i", rtspURL,
-		// Video output: copy H.264, no audio
-		"-c:v", "copy",
-		"-an",
-		"-f", "rtp",
-		videoRTP,
-		// Audio output: transcode to Opus, no video
-		"-c:a", "libopus",
-		"-ar", "48000",
-		"-ac", "2",
-		"-vn",
-		"-f", "rtp",
-		audioRTP,
-	}
+	args := buildFFmpegArgs(rtspURL, videoRTP, audioRTP)
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	cmd.Stderr = log.Writer()
