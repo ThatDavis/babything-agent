@@ -16,7 +16,10 @@ func main() {
 	log.Printf("cloud: %s", cfg.CloudURL)
 	log.Printf("camera: %s", cfg.RTSPURL)
 
-	client := NewSignalingClient(cfg)
+	client, err := NewSignalingClient(cfg)
+	if err != nil {
+		log.Fatalf("failed to create signaling client: %v", err)
+	}
 	go client.Run()
 
 	// Wait for interrupt

@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -20,10 +21,14 @@ type SignalMessage struct {
 	SessionID string          `json:"sessionId,omitempty"`
 }
 
-// SignalingClient maintains the WebSocket connection to the cloud.
+// SignalingClient maintains the WebSocket connection to the cloud and manages
+// peer connections for each active viewer.
 type SignalingClient struct {
 	cfg        Config
-	pc         *PeerConnection
+	peers      map[string]*PeerConnection
+	peersMu    sync.Mutex
+	media      *MediaSource
+	rtspOnce   sync.Once
 	iceServers []webrtc.ICEServer
 
 	conn    *websocket.Conn
@@ -32,12 +37,19 @@ type SignalingClient struct {
 }
 
 // NewSignalingClient creates a client that will keep reconnecting until Stop().
-func NewSignalingClient(cfg Config) *SignalingClient {
+func NewSignalingClient(cfg Config) (*SignalingClient, error) {
+	media, err := NewMediaSource()
+	if err != nil {
+		return nil, err
+	}
+
 	return &SignalingClient{
 		cfg:     cfg,
+		peers:   make(map[string]*PeerConnection),
+		media:   media,
 		done:    make(chan struct{}),
 		writeMu: make(chan struct{}, 1),
-	}
+	}, nil
 }
 
 // Run blocks, keeping a persistent connection to the cloud.
@@ -65,11 +77,8 @@ func (c *SignalingClient) Run() {
 		backoff = 1 * time.Second
 		c.readLoop()
 
-		// Clean up peer connection on disconnect so next offer starts fresh
-		if c.pc != nil {
-			c.pc.Close()
-			c.pc = nil
-		}
+		// Clean up all peer connections on disconnect so next offer starts fresh
+		c.closeAllPeers()
 	}
 }
 
@@ -181,7 +190,10 @@ func parseURLs(raw json.RawMessage) ([]string, error) {
 }
 
 func (c *SignalingClient) handleOffer(msg SignalMessage) {
-	log.Printf("received offer for watch %s", msg.WatchID)
+	c.peersMu.Lock()
+	peerCount := len(c.peers)
+	c.peersMu.Unlock()
+	log.Printf("[signaling] received offer for watch=%s (active peers before: %d)", msg.WatchID, peerCount)
 
 	onCandidate := func(candidate *webrtc.ICECandidate) {
 		if candidate == nil {
@@ -190,46 +202,106 @@ func (c *SignalingClient) handleOffer(msg SignalMessage) {
 		init := candidate.ToJSON()
 		raw, err := json.Marshal(init)
 		if err != nil {
-			log.Printf("marshal candidate failed: %v", err)
+			log.Printf("[signaling] marshal candidate failed: %v", err)
 			return
 		}
 		c.send(SignalMessage{Type: "ice", WatchID: msg.WatchID, Candidate: raw})
 	}
 
-	pc, err := NewPeerConnection(c.iceServers, c.cfg.TURNURL, c.cfg.TURNUsername, c.cfg.TURNPassword, onCandidate)
+	pc, err := NewPeerConnection(c.iceServers, c.cfg.TURNURL, c.cfg.TURNUsername, c.cfg.TURNPassword, c.media.Tracks(), onCandidate)
 	if err != nil {
-		log.Printf("failed to create peer connection: %v", err)
+		log.Printf("[peer] failed to create peer connection for watch=%s: %v", msg.WatchID, err)
 		return
 	}
 
-	if c.pc != nil {
-		c.pc.Close()
+	// Replace any existing peer for this watchID
+	c.peersMu.Lock()
+	if old, ok := c.peers[msg.WatchID]; ok {
+		delete(c.peers, msg.WatchID)
+		c.peersMu.Unlock()
+		log.Printf("[peer] closing previous peer for watch=%s (replacing)", msg.WatchID)
+		go old.Close()
+		c.peersMu.Lock()
 	}
-	c.pc = pc
+	c.peers[msg.WatchID] = pc
+	newCount := len(c.peers)
+	c.peersMu.Unlock()
+	log.Printf("[peer] created peer for watch=%s (active peers: %d)", msg.WatchID, newCount)
+
+	// Auto-cleanup when the peer connection drops
+	watchID := msg.WatchID
+	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
+		log.Printf("[peer] watch=%s state=%s", watchID, s.String())
+		if s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateClosed || s == webrtc.PeerConnectionStateDisconnected {
+			c.removePeer(watchID)
+		}
+	})
 
 	if err := pc.SetRemoteDescription(msg.SDP); err != nil {
 		log.Printf("set remote description failed: %v", err)
+		c.removePeer(watchID)
 		return
 	}
 
 	answer, err := pc.CreateAnswer()
 	if err != nil {
 		log.Printf("create answer failed: %v", err)
+		c.removePeer(watchID)
 		return
 	}
 
-	c.send(SignalMessage{Type: "answer", WatchID: msg.WatchID, SDP: answer})
+	c.send(SignalMessage{Type: "answer", WatchID: watchID, SDP: answer})
+	log.Printf("[signaling] sent answer for watch=%s", watchID)
 
-	// Start pulling RTSP and feeding into the peer connection
-	pc.StartRTSP(c.cfg.RTSPURL)
+	// Start pulling RTSP on the first offer; shared by all viewers
+	c.rtspOnce.Do(func() {
+		log.Printf("[media] starting RTSP relay for camera %s", c.cfg.RTSPURL)
+		c.media.StartRTSP(c.cfg.RTSPURL)
+	})
 }
 
 func (c *SignalingClient) handleRemoteICE(msg SignalMessage) {
-	if c.pc == nil {
+	c.peersMu.Lock()
+	pc, ok := c.peers[msg.WatchID]
+	c.peersMu.Unlock()
+	if !ok {
+		log.Printf("[signaling] ICE for unknown watch=%s (dropped)", msg.WatchID)
 		return
 	}
-	if err := c.pc.AddICECandidate(msg.Candidate); err != nil {
-		log.Printf("add ice candidate failed: %v", err)
+	if err := pc.AddICECandidate(msg.Candidate); err != nil {
+		log.Printf("[signaling] add ice candidate failed for watch=%s: %v", msg.WatchID, err)
+	} else {
+		log.Printf("[signaling] added remote ICE for watch=%s", msg.WatchID)
+	}
+}
+
+func (c *SignalingClient) removePeer(watchID string) {
+	c.peersMu.Lock()
+	pc, ok := c.peers[watchID]
+	if ok {
+		delete(c.peers, watchID)
+	}
+	remaining := len(c.peers)
+	c.peersMu.Unlock()
+	if ok {
+		pc.Close()
+		log.Printf("[peer] removed watch=%s (remaining peers: %d)", watchID, remaining)
+	}
+}
+
+func (c *SignalingClient) closeAllPeers() {
+	c.peersMu.Lock()
+	count := len(c.peers)
+	peers := make([]*PeerConnection, 0, count)
+	for _, pc := range c.peers {
+		peers = append(peers, pc)
+	}
+	c.peers = make(map[string]*PeerConnection)
+	c.peersMu.Unlock()
+
+	log.Printf("[peer] closing all %d peers (websocket disconnect)", count)
+	for _, pc := range peers {
+		pc.Close()
 	}
 }
 
@@ -250,7 +322,8 @@ func (c *SignalingClient) Stop() {
 	if c.conn != nil {
 		c.conn.Close()
 	}
-	if c.pc != nil {
-		c.pc.Close()
+	c.closeAllPeers()
+	if c.media != nil {
+		c.media.Close()
 	}
 }

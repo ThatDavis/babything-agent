@@ -7,11 +7,20 @@
 
 ## Goal
 
-Ship CI/CD release automation and audio stream support for the babything-agent.
+Refactor the babything-agent to support multiple simultaneous viewers with a shared video track and single ffmpeg process, laying the groundwork for audio.
 
 ---
 
 ## This Session
+
+- [x] **Multi-viewer shared track refactor** ✅ Done
+  - [x] Create `MediaSource` to own shared tracks and ffmpeg lifecycle
+  - [x] Refactor `PeerConnection` to accept shared tracks instead of creating its own
+  - [x] Replace single `pc` with `peers` map keyed by `watchID`
+  - [x] Route ICE candidates to the correct peer connection
+  - [x] Auto-cleanup dead peers via `OnConnectionStateChange`
+  - [x] Start ffmpeg once on first offer, share across all viewers
+  - [x] Avoid mutex deadlocks during peer close / reconnect
 
 - [ ] **GitHub Actions: release binaries**
   - [ ] Create `.github/workflows/release.yml`
