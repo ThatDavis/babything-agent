@@ -24,7 +24,7 @@ func NewMediaSource() (*MediaSource, error) {
 	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264},
 		"video",
-		"babything-monitor-video",
+		"babything-monitor",
 	)
 	if err != nil {
 		cancel()
@@ -34,7 +34,7 @@ func NewMediaSource() (*MediaSource, error) {
 	audioTrack, err := webrtc.NewTrackLocalStaticRTP(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
 		"audio",
-		"babything-monitor-audio",
+		"babything-monitor",
 	)
 	if err != nil {
 		cancel()
