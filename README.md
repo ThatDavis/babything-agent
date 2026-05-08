@@ -10,9 +10,66 @@ A lightweight bridge that forwards your local RTSP camera to the [Babything](htt
 
 In your Babything admin dashboard, go to **Settings → Monitor** and click **"Generate Agent Token"**. Copy the token — you'll only see it once.
 
-### 2. Run the agent
+### 2. Download and run
 
-The fastest way is Docker:
+#### Linux (headless binary + systemd)
+
+Download the binary for your architecture from [GitHub Releases](https://github.com/ThatDavis/babything-agent/releases):
+
+```bash
+# AMD64 (most PCs and servers)
+wget https://github.com/ThatDavis/babything-agent/releases/latest/download/babything-agent-linux-amd64
+
+# ARM64 (Raspberry Pi 4/5, Apple Silicon VMs)
+wget https://github.com/ThatDavis/babything-agent/releases/latest/download/babything-agent-linux-arm64
+
+# ARMv7 (Raspberry Pi 3/Zero 2 W)
+wget https://github.com/ThatDavis/babything-agent/releases/latest/download/babything-agent-linux-arm
+```
+
+Create a config file at `~/.config/babything/agent.yaml`:
+
+```yaml
+cloud_url: "wss://yourfamily.babything.app/monitor/agent"
+rtsp_url: "rtsp://192.168.1.50:554/stream1"
+agent_token: "your-token-here"
+```
+
+Run directly:
+```bash
+chmod +x babything-agent-linux-amd64
+./babything-agent-linux-amd64
+```
+
+Or install as a systemd service:
+```bash
+sudo cp babything-agent-linux-amd64 /usr/local/bin/babything-agent
+sudo mkdir -p /etc/babything
+sudo cp your-config.yaml /etc/babything/agent.yaml
+sudo cp build/linux/babything-agent.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now babything-agent
+sudo journalctl -u babything-agent -f
+```
+
+#### Windows (desktop app)
+
+1. Download `babything-agent.exe` from [GitHub Releases](https://github.com/ThatDavis/babything-agent/releases)
+2. Double-click to run — it starts hidden in the background
+3. Click the app icon in the taskbar to open settings
+4. Fill in Cloud URL, RTSP URL, and Agent Token
+5. Click **Save & Start**
+
+#### macOS (desktop app)
+
+1. Download `babything-agent-macos-universal.zip` from [GitHub Releases](https://github.com/ThatDavis/babything-agent/releases)
+2. Extract and open `BabythingAgent.app`
+3. The app runs in the background with a menu bar icon
+4. Click the menu bar icon → **Open Settings**
+5. Fill in Cloud URL, RTSP URL, and Agent Token
+6. Click **Save & Start**
+
+#### Docker (alternative)
 
 ```bash
 docker run -d \
@@ -22,15 +79,6 @@ docker run -d \
   -e RTSP_URL=rtsp://192.168.1.50:554/stream1 \
   -e AGENT_TOKEN=your-token-here \
   ghcr.io/babything/agent:latest
-```
-
-Or run the binary directly:
-
-```bash
-export CLOUD_URL=wss://yourfamily.babything.app/monitor/agent
-export RTSP_URL=rtsp://192.168.1.50:554/stream1
-export AGENT_TOKEN=your-token-here
-./babything-agent
 ```
 
 ### 3. Open the Monitor tab
@@ -87,7 +135,33 @@ Common patterns by manufacturer:
 
 ---
 
-## Environment Variables
+## Configuration
+
+The agent can be configured via **config file** (preferred) or **environment variables**.
+
+### Config file
+
+Default paths:
+- **Linux:** `~/.config/babything/agent.yaml`
+- **Windows:** `%APPDATA%\Babything\agent.yaml`
+- **macOS:** `~/Library/Application Support/Babything/agent.yaml`
+
+Override with `CONFIG_PATH` env var.
+
+Example `agent.yaml`:
+
+```yaml
+cloud_url: "wss://yourfamily.babything.app/monitor/agent"
+rtsp_url: "rtsp://admin:pass@192.168.1.50:554/stream1"
+agent_token: "eyJhbG..."
+
+# Optional TURN server for NAT traversal
+turn_url: ""
+turn_username: ""
+turn_password: ""
+```
+
+### Environment variables
 
 | Variable | Required | Description | Example |
 |----------|----------|-------------|---------|
@@ -99,29 +173,40 @@ Common patterns by manufacturer:
 
 ## Building from Source
 
-Requires **Go 1.23+** and **ffmpeg**.
+Requires **Go 1.23+**, **Node.js 20+**, and **ffmpeg**.
+
+### Headless binary (all platforms)
 
 ```bash
 cd babything-agent
 go mod tidy
-go build -o babything-agent .
+go build -o babything-agent ./cmd/agent
 ```
 
-### Cross-compilation
+### Desktop app (Windows / macOS)
+
+```bash
+# Install Wails
+go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+# Build for current platform
+wails build
+
+# Build for specific platform
+wails build -platform windows/amd64
+wails build -platform darwin/universal
+```
+
+### Cross-compilation (Linux)
 
 **Raspberry Pi (64-bit):**
 ```bash
-GOOS=linux GOARCH=arm64 go build -o babything-agent-arm64 .
+GOOS=linux GOARCH=arm64 go build -o babything-agent-linux-arm64 ./cmd/agent
 ```
 
 **Raspberry Pi (32-bit):**
 ```bash
-GOOS=linux GOARCH=arm GOARM=7 go build -o babything-agent-arm .
-```
-
-**Windows:**
-```bash
-GOOS=windows GOARCH=amd64 go build -o babything-agent.exe .
+GOOS=linux GOARCH=arm GOARM=7 go build -o babything-agent-linux-arm ./cmd/agent
 ```
 
 ### Docker build
@@ -136,7 +221,7 @@ docker build -t babything-agent .
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| "Agent disconnected" in Monitor tab | Agent can't reach cloud | Check `CLOUD_URL` and outbound HTTPS/WSS |
+| "Agent disconnected" in Monitor tab | Agent can't reach cloud | Check `cloud_url` and outbound HTTPS/WSS |
 | "Connection timed out" | WebRTC signaling failed | Check that agent is running and token is valid |
 | Black screen, no video | Camera codec not H.264 | Verify camera outputs H.264, or ffmpeg will transcode |
 | Choppy / high CPU | ffmpeg transcoding | Lower camera resolution or ensure `-c:v copy` works |
@@ -144,6 +229,18 @@ docker build -t babything-agent .
 
 ### Check agent logs
 
+**systemd (Linux):**
+```bash
+sudo journalctl -u babything-agent -f
+```
+
+**Desktop app (Windows / macOS):**
+Logs are printed to stdout. On macOS, run from Terminal:
+```bash
+/Applications/BabythingAgent.app/Contents/MacOS/babything-agent
+```
+
+**Docker:**
 ```bash
 docker logs babything-agent
 ```
