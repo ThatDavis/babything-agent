@@ -27,10 +27,10 @@
 - [ ] Release notes automation from conventional commits
 
 ### Audio Stream Support
-- [ ] Add audio track to WebRTC peer connection
-- [ ] FFmpeg args: extract AAC audio from RTSP alongside video
-- [ ] Browser-side audio playback (volume/mute already in UI)
-- [ ] Fallback: opus re-encoding if camera audio codec is not WebRTC-compatible
+- [x] Add audio track to WebRTC peer connection
+- [x] FFmpeg args: extract audio from RTSP and transcode to Opus
+- [x] Browser-side audio playback (volume/mute already in UI)
+- [x] Fallback: opus re-encoding if camera audio codec is not WebRTC-compatible
 
 ---
 

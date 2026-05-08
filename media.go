@@ -12,12 +12,12 @@ import (
 // peer connection, so ffmpeg runs exactly once regardless of viewer count.
 type MediaSource struct {
 	videoTrack *webrtc.TrackLocalStaticRTP
-	audioTrack *webrtc.TrackLocalStaticRTP // nil until audio support is added
+	audioTrack *webrtc.TrackLocalStaticRTP
 	ctx        context.Context
 	cancel     context.CancelFunc
 }
 
-// NewMediaSource creates the shared video (and future audio) tracks.
+// NewMediaSource creates the shared video and audio tracks.
 func NewMediaSource() (*MediaSource, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -31,8 +31,19 @@ func NewMediaSource() (*MediaSource, error) {
 		return nil, err
 	}
 
+	audioTrack, err := webrtc.NewTrackLocalStaticRTP(
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
+		"audio",
+		"babything-monitor-audio",
+	)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
 	return &MediaSource{
 		videoTrack: videoTrack,
+		audioTrack: audioTrack,
 		ctx:        ctx,
 		cancel:     cancel,
 	}, nil
@@ -57,7 +68,7 @@ func (m *MediaSource) StartRTSP(rtspURL string) {
 				return
 			default:
 			}
-			startRTPRelay(m.ctx, rtspURL, m.videoTrack)
+			startMediaRelay(m.ctx, rtspURL, m.videoTrack, m.audioTrack)
 			// ffmpeg exited; wait before restarting to avoid busy-looping
 			select {
 			case <-m.ctx.Done():
