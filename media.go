@@ -31,8 +31,19 @@ func NewMediaSource() (*MediaSource, error) {
 		return nil, err
 	}
 
+	audioTrack, err := webrtc.NewTrackLocalStaticRTP(
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
+		"audio",
+		"babything-monitor-audio",
+	)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
 	return &MediaSource{
 		videoTrack: videoTrack,
+		audioTrack: audioTrack,
 		ctx:        ctx,
 		cancel:     cancel,
 	}, nil
@@ -57,7 +68,7 @@ func (m *MediaSource) StartRTSP(rtspURL string) {
 				return
 			default:
 			}
-			startRTPRelay(m.ctx, rtspURL, m.videoTrack)
+			startMediaRelay(m.ctx, rtspURL, m.videoTrack, m.audioTrack)
 			// ffmpeg exited; wait before restarting to avoid busy-looping
 			select {
 			case <-m.ctx.Done():

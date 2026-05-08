@@ -33,10 +33,10 @@ Refactor the babything-agent to support multiple simultaneous viewers with a sha
   - [ ] Multi-arch build (amd64, arm64, arm/v7) via buildx
   - [ ] Push to GHCR on every push to `main` and on tags
 
-- [ ] **Audio stream support**
-  - [ ] Add audio track to `webrtc.go`
-  - [ ] Update `rtsp.go` ffmpeg args to extract audio (copy or re-encode to opus)
-  - [ ] Verify browser receives and plays audio
+- [x] **Audio stream support**
+  - [x] Add audio track to `media.go`
+  - [x] Update `rtsp.go` ffmpeg args to extract audio (transcode to opus)
+  - [x] Browser receives and plays audio (transceiver added in MonitorTab)
   - [ ] Update README with audio notes
 
 ---
