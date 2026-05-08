@@ -35,6 +35,9 @@ func bindUDP() (*net.UDPConn, int, error) {
 // audio is transcoded to Opus for universal browser compatibility.
 // If the camera has no audio stream ffmpeg continues with video only.
 func startMediaRelay(ctx context.Context, rtspURL string, videoTrack, audioTrack *webrtc.TrackLocalStaticRTP) {
+	relayCtx, cancelRelay := context.WithCancel(ctx)
+	defer cancelRelay()
+
 	videoConn, videoPort, err := bindUDP()
 	if err != nil {
 		log.Printf("video udp bind failed: %v", err)
@@ -66,8 +69,10 @@ func startMediaRelay(ctx context.Context, rtspURL string, videoTrack, audioTrack
 		args = append(args,
 			"-map", "0:a:0?",
 			"-c:a", "libopus",
-			"-application", "lowdelay",
-			"-b:a", "32k",
+			"-application", "audio",
+			"-b:a", "64k",
+			"-vbr", "on",
+			"-frame_duration", "20",
 			"-f", "rtp",
 			fmt.Sprintf("rtp://127.0.0.1:%d?pkt_size=1200", audioPort),
 		)
@@ -98,11 +103,11 @@ func startMediaRelay(ctx context.Context, rtspURL string, videoTrack, audioTrack
 	}()
 
 	// Relay video RTP in the background.
-	go relayRTP(ctx, videoConn, videoTrack, "video")
+	go relayRTP(relayCtx, videoConn, videoTrack, "video")
 
 	// Relay audio RTP in the background.
 	if audioConn != nil && audioTrack != nil {
-		go relayRTP(ctx, audioConn, audioTrack, "audio")
+		go relayRTP(relayCtx, audioConn, audioTrack, "audio")
 	}
 
 	// Block until ffmpeg exits.
@@ -137,7 +142,7 @@ func relayRTP(ctx context.Context, conn *net.UDPConn, track *webrtc.TrackLocalSt
 
 		if _, err := track.Write(buf[:n]); err != nil {
 			log.Printf("%s track write error: %v", label, err)
-			return
+			continue
 		}
 	}
 }
