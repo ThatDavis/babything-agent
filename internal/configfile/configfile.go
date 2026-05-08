@@ -38,3 +38,12 @@ func Load(path string, v interface{}) error {
 	}
 	return yaml.Unmarshal(data, v)
 }
+
+// Save writes v to a YAML config file.
+func Save(path string, v interface{}) error {
+	data, err := yaml.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
+}
