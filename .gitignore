@@ -5,3 +5,4 @@ frontend/dist/*
 !frontend/dist/.gitkeep
 frontend/wailsjs/runtime/
 build/bin/
+agent-test
