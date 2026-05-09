@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
@@ -31,7 +32,7 @@ func buildFFmpegArgs(rtspURL, videoRTP, audioRTP string) []string {
 		// Audio output: transcode to Opus, no video
 		"-c:a", "libopus",
 		"-ar", "48000",
-		"-ac", "2",
+		"-ac", "1",
 		"-vn",
 		"-f", "rtp",
 		audioRTP,
@@ -89,14 +90,15 @@ func startMediaRelay(ctx context.Context, rtspURL string, videoTrack, audioTrack
 	// Pion's default H.264 payload type. No rewrite needed.
 	go func() {
 		defer wg.Done()
-		relayRTP(ctx, videoConn, videoTrack, 0)
+		relayRTP(ctx, videoConn, videoTrack, 0, 0)
 	}()
 
 	// Audio relay — ffmpeg assigns PT 97 for the second output, but Pion's
 	// default MediaEngine expects Opus at PT 111. Rewrite the PT byte.
+	// Smooth timestamps to 960 ticks per 20ms Opus frame (48kHz).
 	go func() {
 		defer wg.Done()
-		relayRTP(ctx, audioConn, audioTrack, 111)
+		relayRTP(ctx, audioConn, audioTrack, 111, 960)
 	}()
 
 	// Wait for either context cancellation or ffmpeg exit.
@@ -146,8 +148,14 @@ func rewritePayloadType(pkt []byte, newPT uint8) {
 
 // relayRTP reads RTP packets from conn and writes them to track.
 // If rewritePT > 0, the payload type in each packet is rewritten to that value.
-func relayRTP(ctx context.Context, conn *net.UDPConn, track *webrtc.TrackLocalStaticRTP, rewritePT uint8) {
+// If samplesPerPacket > 0, timestamps are rewritten to be perfectly monotonic
+// (baseTs + (seq - baseSeq) * samplesPerPacket). This eliminates jitter
+// caused by ffmpeg's RTP muxer, which is especially noticeable with Opus audio.
+func relayRTP(ctx context.Context, conn *net.UDPConn, track *webrtc.TrackLocalStaticRTP, rewritePT uint8, samplesPerPacket uint32) {
 	buf := make([]byte, 1500)
+	var baseSeq uint16
+	var baseTs uint32
+	var haveBase bool
 	for {
 		select {
 		case <-ctx.Done():
@@ -167,6 +175,22 @@ func relayRTP(ctx context.Context, conn *net.UDPConn, track *webrtc.TrackLocalSt
 
 		if rewritePT > 0 {
 			rewritePayloadType(buf[:n], rewritePT)
+		}
+
+		if samplesPerPacket > 0 && n >= 12 {
+			seq := binary.BigEndian.Uint16(buf[2:4])
+			if !haveBase {
+				baseSeq = seq
+				baseTs = binary.BigEndian.Uint32(buf[4:8])
+				haveBase = true
+			} else {
+				deltaSeq := int32(seq) - int32(baseSeq)
+				if deltaSeq < 0 {
+					deltaSeq += 65536 // RTP seq wraparound
+				}
+				newTs := baseTs + uint32(deltaSeq)*samplesPerPacket
+				binary.BigEndian.PutUint32(buf[4:8], newTs)
+			}
 		}
 
 		if _, err := track.Write(buf[:n]); err != nil {

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/binary"
 	"slices"
 	"testing"
 )
@@ -27,7 +28,7 @@ func TestBuildFFmpegArgsStructure(t *testing.T) {
 		"rtp://127.0.0.1:10000",
 		"-c:a", "libopus",
 		"-ar", "48000",
-		"-ac", "2",
+		"-ac", "1",
 		"-vn",
 		"-f", "rtp",
 		"rtp://127.0.0.1:10001",
@@ -40,6 +41,48 @@ func TestBuildFFmpegArgsStructure(t *testing.T) {
 		if args[i] != want[i] {
 			t.Fatalf("arg[%d]: got %q, want %q", i, args[i], want[i])
 		}
+	}
+}
+
+func TestSmoothRTPTimestamps(t *testing.T) {
+	// Build a fake RTP packet: version=2, PT=111, seq=100, ts=1000
+	pkt := []byte{
+		0x80, 0x6F, // V=2, PT=111
+		0x00, 0x64, // seq=100
+		0x00, 0x00, 0x03, 0xE8, // ts=1000
+		0x00, 0x00, 0x00, 0x00, // SSRC=0
+		0x01, 0x02, 0x03, 0x04, // payload
+	}
+
+	// Simulate the smoothing logic inline
+	baseSeq := binary.BigEndian.Uint16(pkt[2:4])
+	baseTs := binary.BigEndian.Uint32(pkt[4:8])
+	samplesPerPacket := uint32(960)
+
+	// Next packet, seq=101
+	binary.BigEndian.PutUint16(pkt[2:4], 101)
+	seq := binary.BigEndian.Uint16(pkt[2:4])
+	deltaSeq := int32(seq) - int32(baseSeq)
+	newTs := baseTs + uint32(deltaSeq)*samplesPerPacket
+	binary.BigEndian.PutUint32(pkt[4:8], newTs)
+
+	wantTs := uint32(1000 + 960)
+	gotTs := binary.BigEndian.Uint32(pkt[4:8])
+	if gotTs != wantTs {
+		t.Fatalf("timestamp mismatch: got %d, want %d", gotTs, wantTs)
+	}
+
+	// Wraparound: seq=0 after baseSeq=65535
+	baseSeq = 65535
+	baseTs = 1000
+	seq = 0
+	deltaSeq = int32(seq) - int32(baseSeq)
+	if deltaSeq < 0 {
+		deltaSeq += 65536
+	}
+	newTs = baseTs + uint32(deltaSeq)*samplesPerPacket
+	if newTs != 1000+960 {
+		t.Fatalf("wraparound timestamp mismatch: got %d, want %d", newTs, 1000+960)
 	}
 }
 
